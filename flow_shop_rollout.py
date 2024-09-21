@@ -4,10 +4,15 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from multiprocessing import Pool, cpu_count
 
+# 사용자 정의 매개변수
+INPUT_FILE = 't_500_20_mon.csv'  # 입력 파일 이름
+NUM_JOBS = 51  # 처리할 작업 수
+RULE = 'SPT'  # 'SPT' 또는 'LPT'
+
 def calculate_makespan(schedule):
     return max(max(job[2] for job in machine) for machine in schedule if machine)
 
-def apply_spt_lpt(jobs, rule='SPT'):
+def apply_spt_lpt(jobs, rule=RULE):
     return sorted(jobs, key=lambda x: sum(x[1]), reverse=(rule == 'LPT'))
 
 def simulate_remaining_jobs(fixed_jobs, remaining_jobs, n_machines):
@@ -24,7 +29,7 @@ def simulate_remaining_jobs(fixed_jobs, remaining_jobs, n_machines):
             end_time = start_time + processing_times[m]
             schedule[m].append((job_id, start_time, end_time))
     
-    sorted_remaining = apply_spt_lpt(remaining_jobs, 'SPT')
+    sorted_remaining = apply_spt_lpt(remaining_jobs, RULE)
     for job in sorted_remaining:
         job_id, processing_times = job
         for m in range(n_machines):
@@ -102,18 +107,21 @@ def create_gantt_chart(schedule, job_ids):
     plt.show()
 
 if __name__ == "__main__":
-
-    df = pd.read_csv('t_500_20_mon.csv')
+    # 파일 불러오기
+    df = pd.read_csv(INPUT_FILE)
 
     job_ids = df.iloc[:, 0].tolist()
     processing_times = df.iloc[:, 1:].values
 
     # job과 공정 개수
-    num_jobs = 51
+    job_ids = job_ids[:NUM_JOBS]
+    processing_times = processing_times[:NUM_JOBS]
     num_machines = processing_times.shape[1]  # M1, M2, ..., M20
 
-    job_ids = job_ids[:num_jobs]
-    processing_times = processing_times[:num_jobs]
+    print(f"Running simulation with:")
+    print(f"Input file: {INPUT_FILE}")
+    print(f"Number of jobs: {NUM_JOBS}")
+    print(f"Rule: {RULE}")
 
     # 스케줄링 실행
     final_schedule, makespan, optimal_job_sequence = job_scheduling(job_ids, processing_times)
@@ -121,7 +129,7 @@ if __name__ == "__main__":
     # 결과 출력
     print(f"\nFinal Results:")
     print(f"Makespan: {makespan}")
-    print(f"Optimal job sequence: {optimal_job_sequence}")
+    print(f"Optimal job sequence: {' -> '.join(map(str, optimal_job_sequence))}")
 
     # Gantt 차트 생성
-    # create_gantt_chart(final_schedule, job_ids)
+    create_gantt_chart(final_schedule, job_ids)
