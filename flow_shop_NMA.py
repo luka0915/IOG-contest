@@ -6,9 +6,9 @@ import pandas as pd
 import numpy as np
 
 # 매개변수
-INPUT_FILE = 't_500_20_mon.csv'
+INPUT_FILE = 't_500_20_mon.csv'  # 입력 파일 이름
 NUM_JOBS = [10, 25, 52, 53, 56, 62, 75]  # 스케줄링 목록
-TIME_LIMIT = 600  # 시간 제한
+TIME_LIMIT = 600  # 시간 제한(초)
 
 class FlowShopNMA:
     def __init__(self, INPUT_FILE, num_jobs, TIME_LIMIT):
