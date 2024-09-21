@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from multiprocessing import Pool, cpu_count
 
-# 사용자 정의 매개변수
+# 매개변수
 INPUT_FILE = 't_500_20_mon.csv'  # 입력 파일 이름
 NUM_JOBS = 51  # 처리할 작업 수
 RULE = 'SPT'  # 'SPT' 또는 'LPT'
