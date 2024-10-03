@@ -5,23 +5,24 @@ from multiprocessing import Pool, cpu_count
 import random
 import copy
 import datetime
+import time
 
 # 매개변수
 INPUT_FILES = [
     't_500_20_mon.csv', 
-    't_500_20_tue.csv', 
-    't_500_20_wed.csv', 
-    't_500_20_thu.csv', 
+    # 't_500_20_tue.csv', 
+    't_500_20_wed.csv',
+    # 't_500_20_thu.csv', 
     't_500_20_fri.csv'
-    ]
+]
    
-NUM_JOBS = [10, 15, 11, 12, 13]   # 일별 생산요구량
-TIME_LIMIT = 300   # NMA 시간제한
+NUM_JOBS = [66, 66, 66]   # 일별 생산요구량
+TIME_LIMIT = 3600   # 60분 시간제한
 
 # =========================================== NMA ===========================================
 class FlowShopNMA:
     def __init__(self, INPUT_FILE, num_jobs, TIME_LIMIT):   
-        self.df = pd.read_csv(INPUT_FILE)  # 단일 파일 경로로 수정
+        self.df = pd.read_csv(INPUT_FILE)
         self.job_ids = self.df.iloc[:num_jobs, 0].tolist()
         self.processing_times = self.df.iloc[:num_jobs, 1:].values
         self.num_jobs = num_jobs
@@ -148,44 +149,6 @@ class FlowShopNMA:
         elapsed_time = datetime.datetime.now() - start_time
         return best_makespan, best_sequence, elapsed_time, self.x, self.y
 
-    def plot_gantt_chart(self, sequence):
-        completion_times = np.zeros((self.num_jobs, self.num_machines))
-        for i, job in enumerate(sequence):
-            for m in range(self.num_machines):
-                if i == 0 and m == 0:
-                    completion_times[i, m] = self.processing_times[job, m]
-                elif i == 0:
-                    completion_times[i, m] = completion_times[i, m-1] + self.processing_times[job, m]
-                elif m == 0:
-                    completion_times[i, m] = completion_times[i-1, m] + self.processing_times[job, m]
-                else:
-                    completion_times[i, m] = max(completion_times[i-1, m], completion_times[i, m-1]) + self.processing_times[job, m]
-
-        fig, ax = plt.subplots(figsize=(15, 10))
-        cmap = plt.get_cmap("tab20")
-        colors = [cmap(i % 20) for i in range(self.num_jobs)]
-
-        for m in range(self.num_machines):
-            for i, job in enumerate(sequence):
-                start_time = completion_times[i, m] - self.processing_times[job, m]
-                duration = self.processing_times[job, m]
-                ax.broken_barh([(start_time, duration)], (m * 10, 9), facecolors=colors[job], edgecolor='black')
-
-        ax.set_yticks([10 * i + 5 for i in range(self.num_machines)])
-        ax.set_yticklabels([f"Machine {i+1}" for i in range(self.num_machines)])
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Machines")
-        plt.title('Gantt Chart for Flow Shop Scheduling')
-        
-        legend_handles = [plt.Rectangle((0,0),1,1, color=colors[i]) for i in range(self.num_jobs)]
-        plt.legend(legend_handles, [f"Job {self.job_ids[i]}" for i in range(self.num_jobs)], 
-                   bbox_to_anchor=(1.05, 1), loc='upper left')
-        
-        plt.tight_layout()
-        plt.show() 
-# =========================================== NMA ===========================================
-
-
 # ========================================= Rollout =========================================
 def calculate_makespan(schedule):
     return max(max(job[2] for job in machine) for machine in schedule if machine)
@@ -236,13 +199,15 @@ def simulate_job(args):
     
     return job, temp_makespan
 
-def job_scheduling(job_ids, processing_times, rule):
+def job_scheduling(job_ids, processing_times, rule, time_limit):
     n_jobs, n_machines = processing_times.shape
     jobs = list(zip(job_ids, [list(times) for times in processing_times]))
     
     fixed_jobs = []
     best_makespan = float('inf')
     best_schedule = None
+    
+    start_time = time.time()
     
     with Pool(processes=cpu_count()) as pool:
         for iteration in range(n_jobs):
@@ -258,18 +223,157 @@ def job_scheduling(job_ids, processing_times, rule):
             if best_job_makespan < best_makespan:
                 best_makespan = best_job_makespan
                 best_schedule = simulate_remaining_jobs(fixed_jobs, remaining_jobs, n_machines, rule)
+            
+            if time.time() - start_time > time_limit:
+                break
     
     return best_schedule, best_makespan, [job[0] for job in fixed_jobs]
-# ========================================= Rollout =========================================
+
+# ========================================= GA =============================================
+class GA():
+    def __init__(self, INPUT_FILE, num_jobs, TIME_LIMIT):
+        self.df = pd.read_csv(INPUT_FILE)
+        self.processing_times = self.df.iloc[:num_jobs, 1:].values  
+        self.num_jobs = num_jobs
+        self.job_ids = self.df.iloc[:self.num_jobs, 0].tolist()    
+        self.num_machines = self.processing_times.shape[1]  
+        self.parameters = {
+            'MUT': 0.8,
+            'END': 0.01,
+            'POP_SIZE': 10000,
+            'NUM_OFFSPRING': 10,
+            'NUM_OF_ITERATION': 50,
+        }
+        self.mutation_rate = self.parameters['MUT']
+        self.generation = 0
+        self.schedule = []
+        self.start_time = time.time()
+        self.TIME_LIMIT = TIME_LIMIT
+
+    def calculate_makespan(self, sequence):
+        num_jobs = len(sequence)
+        completion_times = np.zeros((num_jobs, self.num_machines))
+
+        for j in range(num_jobs):
+            for m in range(self.num_machines):
+                if j == 0 and m == 0:
+                    completion_times[j][m] = self.processing_times[sequence[j]][m]
+                elif j == 0:
+                    completion_times[j][m] = completion_times[j][m - 1] + self.processing_times[sequence[j]][m]
+                elif m == 0:
+                    completion_times[j][m] = completion_times[j - 1][m] + self.processing_times[sequence[j]][m]
+                else:
+                    completion_times[j][m] = max(completion_times[j - 1][m], completion_times[j][m - 1]) + self.processing_times[sequence[j]][m]
+
+        return completion_times[-1][-1]
+
+    def neh_algorithm(self):
+        total_processing_times = self.df.iloc[:self.num_jobs, 1:].sum(axis=1).tolist()
+
+        sorted_jobs = sorted(range(self.num_jobs), key=lambda i: total_processing_times[i], reverse=True)
+        job_sequence = [sorted_jobs[0]]
+
+        for i in range(1, self.num_jobs):
+            current_job = sorted_jobs[i]
+            best_makespan = float('inf')
+            best_position = 0
+
+            for j in range(len(job_sequence) + 1):
+                temp_sequence = job_sequence[:j] + [current_job] + job_sequence[j:]  
+                makespan = self.calculate_makespan(temp_sequence)
+
+                if makespan < best_makespan:
+                    best_makespan = makespan
+                    best_position = j 
+
+            job_sequence.insert(best_position, current_job)
+
+        return job_sequence
+
+    def generate_random_population(self):
+        population = []
+        for _ in range(self.parameters['POP_SIZE'] - 1):
+            sequence = np.random.permutation(self.num_jobs).tolist()
+            population.append(sequence)
+        return population
+
+    def get_fitness(self, chromosome):
+        makespan = self.calculate_makespan(chromosome)
+        return makespan 
+
+    def ranneh_algorithm(self):
+        neh_sequence = self.neh_algorithm()
+        random_population = self.generate_random_population()
+
+        population = [[neh_sequence, self.get_fitness(neh_sequence)]]  
+        for sequence in random_population:
+            fitness = self.get_fitness(sequence)
+            population.append([sequence, fitness])  
+
+        return population
+    
+    def uniform_selection(self, population, num_parents=2):
+        selected_parents = random.sample(population, num_parents)  
+        return selected_parents
+    
+    def ordered_crossover(self, parent1: np.ndarray, parent2: np.ndarray) -> np.ndarray:
+        size = len(parent1)  
+        child = [None] * size 
+        
+        start, end = sorted(np.random.choice(range(size), 2, replace=False))
+        
+        child[start:end + 1] = parent1[start:end + 1]
+        
+        fill_values = [item for item in parent2 if item not in child]
+        
+        fill_pos = [i for i in range(size) if child[i] is None]
+      
+        for i, value in zip(fill_pos, fill_values):
+            child[i] = value
+        return child 
+
+    def swap_mutation(self, sequence: np.ndarray) -> np.ndarray:
+        if np.random.rand() < self.mutation_rate:
+            idx1, idx2 = np.random.choice(range(len(sequence)), 2, replace=False)
+            sequence[idx1], sequence[idx2] = sequence[idx2], sequence[idx1]  
+        return sequence
+    
+    def replacement_operator(self, population, offsprings):
+        population.extend(offsprings)
+        population.sort(key=lambda x: x[1], reverse=False)
+        new_population = population[:self.parameters['POP_SIZE']]
+        return new_population
+     
+    def search(self):
+        population = self.ranneh_algorithm()  
+        
+        while True:
+            elapsed_time = time.time() - self.start_time
+            if elapsed_time >= self.TIME_LIMIT:
+                break
+
+            offsprings = []
+            for _ in range(self.parameters["NUM_OFFSPRING"]):
+                mom_ch, dad_ch = self.uniform_selection(population)  
+                offspring = self.ordered_crossover(mom_ch[0], dad_ch[0])  
+                offspring = self.swap_mutation(offspring)
+                offsprings.append([offspring, self.get_fitness(offspring)])
+
+            population = self.replacement_operator(population, offsprings)
+            self.generation += 1
+
+        best_solution = population[0]
+        return best_solution[1], best_solution[0], self.generation
 
 if __name__ == "__main__":
-    
     for index, n in enumerate(NUM_JOBS):
         if index >= len(INPUT_FILES):
             print(f"No input file for NUM_JOBS index {index}.")
             continue
 
-        best_makespan = 0
+        best_makespan = float('inf')
+        best_sequence = None
+        best_model = None
 
         INPUT_FILE = INPUT_FILES[index]
         df = pd.read_csv(INPUT_FILE)
@@ -283,22 +387,35 @@ if __name__ == "__main__":
 
         # rollout-SPT 실행
         RULE = 'SPT' 
-        SPT_schedule, SPT_makespan, SPT_optimal_job_sequence = job_scheduling(job_ids, processing_times, RULE)
-        best_makespan, optimal_job_sequence, model = SPT_makespan, SPT_optimal_job_sequence, 'SPT'
+        SPT_schedule, SPT_makespan, SPT_optimal_job_sequence = job_scheduling(job_ids, processing_times, RULE, TIME_LIMIT)
+        if SPT_makespan < best_makespan:
+            best_makespan, best_sequence, best_model = SPT_makespan, SPT_optimal_job_sequence, 'SPT'
 
         # rollout-LPT 실행
         RULE = 'LPT' 
-        LPT_schedule, LPT_makespan, LPT_optimal_job_sequence = job_scheduling(job_ids, processing_times, RULE)
-        if best_makespan >= LPT_makespan: 
-            best_makespan, optimal_job_sequence, model = LPT_makespan, LPT_optimal_job_sequence, 'LPT'
+        LPT_schedule, LPT_makespan, LPT_optimal_job_sequence = job_scheduling(job_ids, processing_times, RULE, TIME_LIMIT)
+        if LPT_makespan < best_makespan:
+            best_makespan, best_sequence, best_model = LPT_makespan, LPT_optimal_job_sequence, 'LPT'
 
         # FlowShopNMA 실행
         nma = FlowShopNMA(INPUT_FILE, n, TIME_LIMIT)
         NMA_makespan, NMA_optimal_job_sequence, elapsed_time, x, y = nma.sim()
-        if best_makespan >= NMA_makespan:
-            best_makespan, optimal_job_sequence, model = NMA_makespan, NMA_optimal_job_sequence, 'NMA'
+        if NMA_makespan < best_makespan:
+            best_makespan, best_sequence, best_model = NMA_makespan, NMA_optimal_job_sequence, 'NMA'
 
-        print(f"NUM_JOBS {n} Final Results:")
-        print(f"Model: {model}")
-        print(f"Makespan: {best_makespan}")
-        print(f"Optimal job sequence: {','.join(map(str, [job + 1 for job in optimal_job_sequence]))}\n")
+        # GA 실행
+        ga = GA(INPUT_FILE, n, TIME_LIMIT)
+        GA_makespan, GA_optimal_job_sequence, GA_generations = ga.search()
+        if GA_makespan < best_makespan:
+            best_makespan, best_sequence, best_model = GA_makespan, GA_optimal_job_sequence, 'GA'
+
+        print(f"\nNUM_JOBS {n} Final Results:")
+        print(f"Best Model: {best_model}")
+        print(f"Best Makespan: {best_makespan}")
+        print(f"Optimal job sequence: {','.join(map(str, [job_ids[job] for job in best_sequence]))}")
+
+        print("\nAll Models Results:")
+        print(f"SPT Makespan: {SPT_makespan}")
+        print(f"LPT Makespan: {LPT_makespan}")
+        print(f"NMA Makespan: {NMA_makespan}")
+        print(f"GA Makespan: {GA_makespan}")
