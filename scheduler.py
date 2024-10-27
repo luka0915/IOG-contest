@@ -6,17 +6,18 @@ import random
 import copy
 import datetime
 import time
+import multiprocessing as mp
 
 # 매개변수
 INPUT_FILES = [
     't_500_20_mon.csv', 
-    # 't_500_20_tue.csv', 
-    't_500_20_wed.csv',
-    # 't_500_20_thu.csv', 
-    't_500_20_fri.csv'
+    't_500_20_tue.csv', 
+    # 't_500_20_wed.csv',
+    't_500_20_thu.csv',
+    # 't_500_20_fri.csv'
 ]
    
-NUM_JOBS = [66, 66, 66]   # 일별 생산요구량
+NUM_JOBS = [120, 60, 120]   # 일별 생산요구량
 TIME_LIMIT = 3600   # 60분 시간제한
 
 # =========================================== NMA ===========================================
@@ -365,6 +366,194 @@ class GA():
         best_solution = population[0]
         return best_solution[1], best_solution[0], self.generation
 
+#========================================= IGA =============================================
+class IGA():
+    def __init__(self, INPUT_FILE, T, num_jobs): 
+        self.df = pd.read_csv(INPUT_FILE)
+        self.processing_times = self.df.iloc[:, 1:].values
+        self.num_jobs = num_jobs  # 작업 수
+        self.num_machines = self.processing_times.shape[1]  # 기계 수
+        self.job_ids = self.df.iloc[:self.num_jobs, 0].tolist()    
+        self.schedule = []
+        self.T = 0.1
+        self.temperature = self.calculate_temperature()
+
+    def calculate_temperature(self):
+        total_processing_time = np.sum(self.processing_times)
+        temperature = self.T * total_processing_time / (self.num_jobs * self.num_machines * 10)
+        return temperature    
+
+    def calculate_makespan(self, sequence):
+        num_jobs = len(sequence)
+        completion_times = np.zeros((num_jobs, self.num_machines))
+        
+        # Makespan calculation (unchanged)
+        for j in range(num_jobs):
+            for m in range(self.num_machines):
+                if j == 0 and m == 0:
+                    completion_times[j][m] = self.processing_times[sequence[j]][m]
+                elif j == 0:
+                    completion_times[j][m] = completion_times[j][m - 1] + self.processing_times[sequence[j]][m]
+                elif m == 0:
+                    completion_times[j][m] = completion_times[j - 1][m] + self.processing_times[sequence[j]][m]
+                else:
+                    completion_times[j][m] = max(completion_times[j - 1][m], completion_times[j][m - 1]) + self.processing_times[sequence[j]][m]
+        
+        return completion_times[-1][-1]  
+
+    # NEH algorithm function (unchanged)
+    def neh_algorithm(self):
+        total_processing_times = self.df.iloc[:, 1:].sum(axis=1).tolist()
+        sorted_jobs = sorted(range(self.num_jobs), key=lambda i: total_processing_times[i], reverse=True)
+        job_sequence = [sorted_jobs[0]]
+
+        for i in range(1, self.num_jobs):
+            current_job = sorted_jobs[i]
+            best_makespan = float('inf')
+            best_position = 0
+
+            for j in range(len(job_sequence) + 1):
+                temp_sequence = job_sequence[:j] + [current_job] + job_sequence[j:]  
+                makespan = self.calculate_makespan(temp_sequence)
+
+                if makespan < best_makespan:
+                    best_makespan = makespan
+                    best_position = j 
+
+            job_sequence.insert(best_position, current_job)
+
+        return job_sequence
+    
+    def destruction(self, job_sequence):
+        num_jobs_to_destroy = max(1, int(len(job_sequence) * 0.1))  
+        Pr = random.sample(job_sequence, num_jobs_to_destroy)  
+        Pd = copy.deepcopy(job_sequence)  
+        for job in Pr:
+            Pd.remove(job)  
+        return Pd, Pr  
+
+    def construction(self, Pd, Pr):
+        for job in Pr: 
+            best_makespan = float('inf') 
+            best_position = 0     
+            previous_makespan = self.calculate_makespan(Pd)  
+
+            for position in range(len(Pd) + 1):  
+                temp_sequence = Pd[:position] + [job] + Pd[position:]  
+                makespan = self.calculate_makespan(temp_sequence)  
+
+                if makespan < best_makespan:
+                    best_makespan = makespan  
+                    best_position = position  
+
+            Pd.insert(best_position, job)
+
+        return Pd 
+    
+    def local_search(self, best_sequence, time_limit):
+        best_makespan = self.calculate_makespan(best_sequence)
+        best_solution = best_sequence[:]
+        improved = True
+
+        start_time = time.time()
+        while improved:
+            if time.time() - start_time > time_limit:
+                #print("시간 제한을 초과하여 local search를 중단합니다.")
+                break
+
+            improved = False
+            jobs = best_solution[:]  
+            positions = range(len(best_solution) + 1)
+
+            with mp.Pool(processes=mp.cpu_count()) as pool:
+                results = []
+                job_to_insert_info = []
+
+                for i in range(len(jobs)):  
+                    job_to_insert = jobs[i]  
+                    for position in positions:  
+                        job_to_insert_info.append((job_to_insert, position))
+                        results.append(pool.apply_async(self.evaluate_insertion, (job_to_insert, best_solution, position)))
+
+                for idx, result in enumerate(results):
+                    job_to_insert, position = job_to_insert_info[idx]
+                    new_makespan = result.get()
+
+                    if new_makespan < best_makespan:
+                        best_makespan = new_makespan
+                        temp_solution = best_solution[:]
+                        temp_solution.remove(job_to_insert)
+                        new_solution = temp_solution[:position] + [job_to_insert] + temp_solution[position:]
+                        best_solution = new_solution[:]
+                        improved = True
+
+        return best_solution, best_makespan
+
+    def optimize_schedule(self):
+        start_time = time.time()  
+       
+        current_sequence = self.neh_algorithm()
+        current_makespan = self.calculate_makespan(current_sequence)
+        
+        #print("초기 스케줄:", current_sequence)
+        #print("초기 makespan:", current_makespan)
+
+        best_makespan = current_makespan
+        best_sequence = current_sequence.copy()
+
+        total_time_limit = 1800
+        search_time_limit = 900
+
+        while time.time() - start_time < total_time_limit:
+            iteration_start_time = time.time()
+
+            Pd, Pr = self.destruction(best_sequence)
+            new_sequence = self.construction(Pd, Pr)
+            new_makespan = self.calculate_makespan(new_sequence)
+
+            if new_makespan < best_makespan:
+                #print(f"새로운 스케줄을 찾았습니다. Makespan: {new_makespan}")
+                best_sequence = new_sequence
+                best_makespan = new_makespan
+            #else:
+                #print("새로운 스케줄이 현재 스케줄보다 좋지 않습니다. 다시 시도합니다.")
+
+            iteration_duration = time.time() - iteration_start_time
+            if iteration_duration > search_time_limit:
+                #print("한 번의 destruction/construction 단계에서 시간이 너무 오래 소요되었습니다. 다음 반복으로 넘어갑니다.")
+                continue  
+
+            remaining_time = total_time_limit - (time.time() - start_time)
+            if remaining_time < 60:  
+                #print("남은 시간이 부족하여 탐색을 종료합니다.")
+                break
+
+            #print("local_search를 실행합니다.")
+            improved_solution, improved_makespan = self.local_search(best_sequence, remaining_time)
+
+            if improved_makespan < best_makespan:
+                best_sequence = improved_solution
+                best_makespan = improved_makespan
+                #print("로컬 서치 후 해가 더 좋습니다.")
+
+            #if best_makespan < self.calculate_makespan(current_sequence):
+                #print("새로운 최적 해를 찾았습니다.")
+            #else:
+                #print("기존 해가 최적입니다.")
+            
+        end_time = time.time()  # End timer
+
+        # Total execution time output
+        total_time = end_time - start_time
+        return best_makespan, best_sequence
+
+    def evaluate_insertion(self, job_to_insert, best_solution, position):
+        temp_solution = best_solution[:]
+        temp_solution.remove(job_to_insert)
+        new_solution = temp_solution[:position] + [job_to_insert] + temp_solution[position:]
+        new_makespan = self.calculate_makespan(new_solution)
+        return new_makespan
+
 if __name__ == "__main__":
     for index, n in enumerate(NUM_JOBS):
         if index >= len(INPUT_FILES):
@@ -397,7 +586,7 @@ if __name__ == "__main__":
         if LPT_makespan < best_makespan:
             best_makespan, best_sequence, best_model = LPT_makespan, LPT_optimal_job_sequence, 'LPT'
 
-        # FlowShopNMA 실행
+        # # FlowShopNMA 실행
         nma = FlowShopNMA(INPUT_FILE, n, TIME_LIMIT)
         NMA_makespan, NMA_optimal_job_sequence, elapsed_time, x, y = nma.sim()
         if NMA_makespan < best_makespan:
@@ -409,6 +598,12 @@ if __name__ == "__main__":
         if GA_makespan < best_makespan:
             best_makespan, best_sequence, best_model = GA_makespan, GA_optimal_job_sequence, 'GA'
 
+        # IGA 실행
+        iga = IGA(INPUT_FILE='t_500_20_mon.csv', T=0.1, num_jobs=n)
+        IGA_makespan, IGA_optimal_job_sequence = iga.optimize_schedule()
+        if IGA_makespan < best_makespan:
+            best_makespan, best_sequence, best_model = IGA_makespan, IGA_optimal_job_sequence, 'IGA'
+
         print(f"\nNUM_JOBS {n} Final Results:")
         print(f"Best Model: {best_model}")
         print(f"Best Makespan: {best_makespan}")
@@ -419,3 +614,4 @@ if __name__ == "__main__":
         print(f"LPT Makespan: {LPT_makespan}")
         print(f"NMA Makespan: {NMA_makespan}")
         print(f"GA Makespan: {GA_makespan}")
+        print(f"IGA Makespan: {IGA_makespan}")
