@@ -599,7 +599,7 @@ if __name__ == "__main__":
             best_makespan, best_sequence, best_model = GA_makespan, GA_optimal_job_sequence, 'GA'
 
         # IGA 실행
-        iga = IGA(INPUT_FILE='t_500_20_mon.csv', T=0.1, num_jobs=n)
+        iga = IGA(INPUT_FILE=INPUT_FILE, T=0.1, num_jobs=n)
         IGA_makespan, IGA_optimal_job_sequence = iga.optimize_schedule()
         if IGA_makespan < best_makespan:
             best_makespan, best_sequence, best_model = IGA_makespan, IGA_optimal_job_sequence, 'IGA'
